@@ -5,48 +5,87 @@ const rooms = {};
 
 
 export const roomHandler = (socket) => {
-    const createRoom = (data = {}) => {
-        const { roomId, userID } = data;
+    const createRoom = ({ roomId,userID }) => {
+     
         if (!roomId || !userID) {
-            console.error("Invalid data provided:", data);
+            console.error("Invalid data provided:",roomId, userID);
             return;
         }
         rooms[roomId] = [];
         socket.emit("room-created", { roomId, userID });
+        console.log("room created", roomId, userID);
     };
     
 
-    const joinRoom = ({ roomId, peerId,userID,email }) => {
-
-        
-     
+    const joinRoom = ({ roomId, userID, email, peerId }) => {
+        // Ensure the room exists before proceeding
         if (rooms[roomId]) {
-            console.log("user joined the room", roomId, peerId);
-            rooms[roomId].push(peerId);
+            // Check if the email already exists in the room (you might store emails with peerIds)
+            const existingParticipant = rooms[roomId].find(participant => participant.email === email);
+            
+            if (existingParticipant) {
+                // Emit a message to the user that they're already on the call
+                console.log("User already on the call:", email);
+                socket.emit("user-already-on-call", { message: "User already on the call", email });
+                return; // Exit function, no further actions needed
+            }
+            
+            console.log("user joined the room", roomId, peerId, userID);
+            
+            // Proceed only if peerId is valid
+            if (peerId) {
+                rooms[roomId].push({ peerId, email }); // Store peerId and email together
+                
+                // Emit the updated list of participants
+                socket.emit("get-users", {
+                    roomId,
+                    participants: rooms[roomId],
+                });
+                socket.broadcast.to(roomId).emit("get-users", {
+                    roomId,
+                    participants: rooms[roomId],
+                });
+            }
+           
+            // Let the user join the room
             socket.join(roomId);
             socket.to(roomId).emit("user-joined", { peerId });
+            socket.emit("room-created", { roomId, userID });
            
-            socket.emit("get-users", {
-                roomId,
-                participants: rooms[roomId],
-            });
+            // Mark the user as online
             userOnline({ roomId, email });
            
         } else {
-           
-            createRoom(roomId,userID);
+            console.log("Room does not exist, creating room:", roomId, userID);
+            createRoom({ roomId, userID });
         }
+    
+        // Handle disconnection
         socket.on("disconnect", () => {
             console.log("user left the room", peerId);
             leaveRoom({ roomId, peerId });
         });
     };
-
-    const leaveRoom = ({ peerId, roomId }) => {
-        // Optionally remove the user from the room
- rooms[roomId] = rooms[roomId]?.filter((id) => id !== peerId);
-        socket.to(roomId).emit("user-disconnected", peerId);
+    
+    const leaveRoom = ({ roomId, peerId }) => {
+        if (rooms[roomId]) {
+            // Filter out the participant with the matching peerId
+            rooms[roomId] = rooms[roomId].filter(participant => participant.peerId !== peerId);
+    
+            // Notify remaining users about the participant who left
+            socket.to(roomId).emit("user-disconnected", { peerId });
+            socket.to(roomId).emit("user-left", { peerId });
+    
+            // Emit the updated list of participants to the room
+            socket.to(roomId).emit("get-users", {
+                roomId,
+                participants: rooms[roomId], // Updated participants list without the disconnected peerId
+            });
+    
+            console.log(`Peer ${peerId} left room ${roomId}. Remaining participants:`, rooms[roomId]);
+        }
     };
+    
 
     const startSharing = ({ peerId, roomId }) => {
         console.log("started sharing");
@@ -70,6 +109,7 @@ export const roomHandler = (socket) => {
     console.log(`User ${email} uploaded a signature to room ${roomId}. URL: ${signatureUrl}`);
     // Emit to everyone else in the room that a user has signed
     socket.to(roomId).emit('user-signed', { email, signatureUrl });
+
   });
 
   
